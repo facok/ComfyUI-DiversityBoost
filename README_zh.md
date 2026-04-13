@@ -79,6 +79,21 @@ MODEL → [Diversity Boost] → MODEL → KSampler
 | 2.00 | 激进——更多多样性，有一定风险 |
 | 0.00 | 禁用——无限幅（原始行为） |
 
+## DiversityBoost vs Dummy Token
+
+两者都旨在恢复蒸馏模型的多样性，但作用层面完全不同：
+
+| | DiversityBoost | Dummy Token |
+|---|---|---|
+| **机制** | 在频域旋转低频相位 | 添加/修改 padding token 偏移 attention 上下文 |
+| **作用目标** | 空间排列（构图骨架） | 全局 attention 偏置（间接） |
+| **构图改变** | 直接、可控（精确旋转角度） | 间接、随机（蝴蝶效应） |
+| **多样性来源** | 每个 seed 独有的噪声相位 | 随机 padding token 内容 |
+| **安全性** | 振幅精确保持；Butterworth + tanh 双重限幅 | 无数学保证 |
+| **prompt 遵循度** | 不受影响（操作空间结构，不涉及语义） | 可能下降（改变 attention 分布） |
+
+简单说：DiversityBoost 是**精确的空间手术**——改变物体的位置布局，不影响物体本身的样貌。Dummy token 是**往模型输入里注入噪声**，依赖蝴蝶效应产生不同结果。
+
 ## 使用建议
 
 - **从默认值开始**——strength=1.0、n_periods=2、max_rotation=π/2 是安全的基线

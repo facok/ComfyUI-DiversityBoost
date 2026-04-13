@@ -79,6 +79,21 @@ The cutoff adapts to image resolution automatically: `freq_cutoff = n_periods / 
 | 2.00 | Aggressive — more diversity, some risk |
 | 0.00 | Disabled — original uncapped behavior |
 
+## DiversityBoost vs Dummy Token
+
+Both aim to restore diversity in distilled models, but they work at fundamentally different levels:
+
+| | DiversityBoost | Dummy Token |
+|---|---|---|
+| **Mechanism** | Rotate low-frequency phase in frequency domain | Add/modify padding tokens to shift attention context |
+| **Target** | Spatial arrangement (composition skeleton) | Global attention bias (indirect) |
+| **Composition change** | Direct and controllable (precise rotation angles) | Indirect, random (butterfly effect) |
+| **Diversity source** | Each seed's unique noise phase | Random padding token content |
+| **Safety** | Amplitude exactly preserved; Butterworth + tanh double-bounded | No mathematical guarantees |
+| **Prompt adherence** | Unaffected (operates on spatial structure, not semantics) | May degrade (alters attention distribution) |
+
+In short: DiversityBoost is **precise spatial surgery** — it changes where things are placed without affecting what they look like. Dummy token is **injecting noise into the model's input** hoping for a butterfly effect.
+
 ## Tips
 
 - **Start with defaults** — strength=1.0, n_periods=2, max_rotation=π/2 is a safe baseline
