@@ -92,7 +92,7 @@ Both aim to restore diversity in distilled models, but they work at fundamentall
 | **Safety** | Amplitude exactly preserved; Butterworth + tanh double-bounded | No mathematical guarantees |
 | **Prompt adherence** | Unaffected (operates on spatial structure, not semantics) | May degrade (alters attention distribution) |
 
-In short: DiversityBoost is **precise spatial surgery** — it changes where things are placed without affecting what they look like. Dummy token is **injecting noise into the model's input** hoping for a butterfly effect.
+In short: DiversityBoost operates precisely on composition-scale phase in the frequency domain, with mathematically bounded safety guarantees. Dummy token injects perturbation at the token level — the effect is indirect and unpredictable.
 
 ## Tips
 

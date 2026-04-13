@@ -92,7 +92,7 @@ MODEL → [Diversity Boost] → MODEL → KSampler
 | **安全性** | 振幅精确保持；Butterworth + tanh 双重限幅 | 无数学保证 |
 | **prompt 遵循度** | 不受影响（操作空间结构，不涉及语义） | 可能下降（改变 attention 分布） |
 
-简单说：DiversityBoost 是**精确的空间手术**——改变物体的位置布局，不影响物体本身的样貌。Dummy token 是**往模型输入里注入噪声**，依赖蝴蝶效应产生不同结果。
+简单说：DiversityBoost 在频域精确操作构图尺度的相位，有数学边界保证安全性。Dummy token 在 token 层面注入扰动，效果间接且不可预测。
 
 ## 使用建议
 
