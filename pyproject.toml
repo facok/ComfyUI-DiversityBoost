@@ -1,0 +1,9 @@
+[project]
+name = "comfyui-diversityboost"
+description = "Restore composition diversity for distilled diffusion models. Training-free frequency-domain phase injection."
+version = "1.0.0"
+license = "MIT"
+requires-python = ">=3.10"
+
+[project.urls]
+Repository = "https://github.com/facok/ComfyUI-DiversityBoost"
