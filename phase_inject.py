@@ -157,13 +157,13 @@ def _phase_inject(raw_pred, raw_noise, strength, freq_mask, max_rotation,
     # total energy.  This rescales per-sample RMS back to the original level.
     if energy_compensate and hf_preserve < 1.0 - 1e-6:
         pred_rms = raw_pred.float().pow(2).mean(dim=(-2, -1), keepdim=True).sqrt().clamp(min=1e-8)
-        new_rms = raw_new.float().pow(2).mean(dim=(-2, -1), keepdim=True).sqrt().clamp(min=1e-8)
+        new_rms = raw_new.pow(2).mean(dim=(-2, -1), keepdim=True).sqrt().clamp(min=1e-8)
         raw_new = raw_new * (pred_rms / new_rms)
 
     return raw_new.to(dtype=raw_pred.dtype)
 
 
-def build_phase_injection_fn(strength=1.0, freq_cutoff=0.02, max_rotation=1.5708,
+def build_phase_injection_fn(strength=1.0, freq_cutoff=0.005, max_rotation=1.5708,
                              hf_preserve=0.0, energy_compensate=False):
     """Build a post_cfg_function that injects noise phase into the denoised prediction.
 
@@ -226,43 +226,44 @@ def build_phase_injection_fn(strength=1.0, freq_cutoff=0.02, max_rotation=1.5708
                                 max_rotation, hf_preserve, energy_compensate)
 
         # --- Logging ---
-        with torch.no_grad():
-            delta = (raw_new - raw_pred).float()
-            delta_rms = delta.pow(2).mean().sqrt().item()
-            pred_rms = raw_pred.float().pow(2).mean().sqrt().item()
+        if log.isEnabledFor(logging.INFO):
+            with torch.no_grad():
+                delta = (raw_new - raw_pred).float()
+                delta_rms = delta.pow(2).mean().sqrt().item()
+                pred_rms = raw_pred.float().pow(2).mean().sqrt().item()
 
-            if log.isEnabledFor(logging.DEBUG):
-                F_pred_log = torch.fft.rfft2(raw_pred.float())
-                F_new_log = torch.fft.rfft2(raw_new.float())
-                phase_diff = (F_new_log * F_pred_log.conj()).angle().abs()
-                mask_thresh = freq_mask > 0.1
-                if mask_thresh.any():
-                    mean_phase_shift = phase_diff[mask_thresh.expand_as(phase_diff)].mean().item()
+                if log.isEnabledFor(logging.DEBUG):
+                    F_pred_log = torch.fft.rfft2(raw_pred.float())
+                    F_new_log = torch.fft.rfft2(raw_new.float())
+                    phase_diff = (F_new_log * F_pred_log.conj()).angle().abs()
+                    mask_thresh = freq_mask > 0.1
+                    if mask_thresh.any():
+                        mean_phase_shift = phase_diff[mask_thresh.expand_as(phase_diff)].mean().item()
+                    else:
+                        mean_phase_shift = 0.0
+
+                    log.debug(
+                        "[DiversityBoost] step=0  strength=%.3f  freq_cutoff=%.3f  "
+                        "max_rotation=%.3f  hf_preserve=%.3f  shape=%s  "
+                        "delta_rms=%.4f  pred_rms=%.4f  ratio=%.4f  "
+                        "mean_phase_shift=%.3f rad (%.1f deg)",
+                        strength, freq_cutoff, max_rotation, hf_preserve,
+                        list(raw_pred.shape),
+                        delta_rms, pred_rms,
+                        delta_rms / max(pred_rms, 1e-8),
+                        mean_phase_shift,
+                        math.degrees(mean_phase_shift),
+                    )
                 else:
-                    mean_phase_shift = 0.0
-
-                log.debug(
-                    "[DiversityBoost] step=0  strength=%.3f  freq_cutoff=%.3f  "
-                    "max_rotation=%.3f  hf_preserve=%.3f  shape=%s  "
-                    "delta_rms=%.4f  pred_rms=%.4f  ratio=%.4f  "
-                    "mean_phase_shift=%.3f rad (%.1f deg)",
-                    strength, freq_cutoff, max_rotation, hf_preserve,
-                    list(raw_pred.shape),
-                    delta_rms, pred_rms,
-                    delta_rms / max(pred_rms, 1e-8),
-                    mean_phase_shift,
-                    math.degrees(mean_phase_shift),
-                )
-            else:
-                log.info(
-                    "[DiversityBoost] step=0  strength=%.3f  freq_cutoff=%.3f  "
-                    "max_rotation=%.3f  hf_preserve=%.3f  shape=%s  "
-                    "delta_rms=%.4f  pred_rms=%.4f  ratio=%.4f",
-                    strength, freq_cutoff, max_rotation, hf_preserve,
-                    list(raw_pred.shape),
-                    delta_rms, pred_rms,
-                    delta_rms / max(pred_rms, 1e-8),
-                )
+                    log.info(
+                        "[DiversityBoost] step=0  strength=%.3f  freq_cutoff=%.3f  "
+                        "max_rotation=%.3f  hf_preserve=%.3f  shape=%s  "
+                        "delta_rms=%.4f  pred_rms=%.4f  ratio=%.4f",
+                        strength, freq_cutoff, max_rotation, hf_preserve,
+                        list(raw_pred.shape),
+                        delta_rms, pred_rms,
+                        delta_rms / max(pred_rms, 1e-8),
+                    )
 
         # --- Convert back to process_in space ---
         modified = raw_to_denoised(raw_new, model).to(dtype=denoised.dtype)

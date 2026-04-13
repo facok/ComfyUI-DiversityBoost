@@ -36,7 +36,7 @@ class DiversityBoost(io.ComfyNode):
                                        "the cap prevents any bin from over-rotating. "
                                        "To increase diversity further, raise freq_cutoff "
                                        "(more bins) or max_rotation (higher ceiling)."),
-                io.Float.Input("freq_cutoff", default=0.02, min=0.005, max=0.05, step=0.005,
+                io.Float.Input("freq_cutoff", default=0.005, min=0.005, max=0.05, step=0.005,
                                tooltip="Butterworth LPF cutoff in normalized frequency. "
                                        "Frequencies below cutoff are modified, "
                                        "above are protected (steep 6th-order rolloff). "
@@ -45,7 +45,7 @@ class DiversityBoost(io.ComfyNode):
                                        "0.015 = ≤3 periods (conservative), "
                                        "0.020 = ≤4 periods (balanced, recommended), "
                                        "0.025 = ≤5 periods (aggressive, higher risk)."),
-                io.Float.Input("max_rotation", default=1.57, min=0.0, max=3.14, step=0.05,
+                io.Float.Input("max_rotation", default=1.5708, min=0.0, max=3.14, step=0.05,
                                tooltip="Per-bin rotation budget in radians (0 = no cap). "
                                        "Caps the maximum phase rotation at any single "
                                        "frequency bin via tanh soft saturation. "
@@ -59,18 +59,6 @@ class DiversityBoost(io.ComfyNode):
                                        "1.57 = balanced (π/2, recommended), "
                                        "2.00 = aggressive (more diversity, some risk), "
                                        "0.00 = disabled (original uncapped behavior)."),
-                io.Float.Input("hf_preserve", default=0.0, min=0.0, max=1.0, step=0.05,
-                               tooltip="High-frequency amplitude preservation (0-1). "
-                                       "Controls how much high-freq detail survives "
-                                       "after phase injection. "
-                                       "Distilled models produce fully-formed predictions "
-                                       "at step 0 — rotating low-freq phase while keeping "
-                                       "high-freq detail causes 'frequency shearing': "
-                                       "the body moves but fingers/edges stay pinned at "
-                                       "original positions, causing limb deformity. "
-                                       "0.0 = full blur (like teacher step 0, safest), "
-                                       "0.3 = keep 30% HF (some semantic hints preserved), "
-                                       "1.0 = keep all HF (risks shearing)."),
                 io.Boolean.Input("energy_compensate", default=False,
                                  tooltip="Rescale output RMS to match original prediction. "
                                          "When hf_preserve < 1, high-freq amplitude is "
@@ -88,7 +76,7 @@ class DiversityBoost(io.ComfyNode):
         return time.time()
 
     @classmethod
-    def execute(cls, model, strength, freq_cutoff, max_rotation, hf_preserve, energy_compensate) -> io.NodeOutput:
+    def execute(cls, model, strength, freq_cutoff, max_rotation, energy_compensate) -> io.NodeOutput:
         m = model.clone()
 
         if strength > 1e-6:
@@ -97,7 +85,7 @@ class DiversityBoost(io.ComfyNode):
                     strength=strength,
                     freq_cutoff=freq_cutoff,
                     max_rotation=max_rotation,
-                    hf_preserve=hf_preserve,
+                    hf_preserve=0.0,
                     energy_compensate=energy_compensate,
                 ),
             )
