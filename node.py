@@ -36,15 +36,16 @@ class DiversityBoost(io.ComfyNode):
                                        "the cap prevents any bin from over-rotating. "
                                        "To increase diversity further, raise freq_cutoff "
                                        "(more bins) or max_rotation (higher ceiling)."),
-                io.Float.Input("freq_cutoff", default=0.005, min=0.005, max=0.05, step=0.005,
-                               tooltip="Butterworth LPF cutoff in normalized frequency. "
-                                       "Frequencies below cutoff are modified, "
-                                       "above are protected (steep 6th-order rolloff). "
-                                       "Controls how many spatial periods are affected: "
-                                       "0.010 = ≤2 periods (global balance only), "
-                                       "0.015 = ≤3 periods (conservative), "
-                                       "0.020 = ≤4 periods (balanced, recommended), "
-                                       "0.025 = ≤5 periods (aggressive, higher risk)."),
+                io.Int.Input("n_periods", default=2, min=1, max=10, step=1,
+                             tooltip="Max spatial periods to affect (Butterworth LPF). "
+                                     "Frequencies with ≤ this many full cycles across "
+                                     "the frame are modified; higher frequencies are "
+                                     "protected. Resolution-independent: the cutoff "
+                                     "adapts automatically to any image size. "
+                                     "1 = ultra-conservative (global balance only), "
+                                     "2 = conservative (default, recommended), "
+                                     "3 = balanced (moderate diversity), "
+                                     "4 = aggressive (more diversity, higher risk)."),
                 io.Float.Input("max_rotation", default=1.5708, min=0.0, max=3.14, step=0.05,
                                tooltip="Per-bin rotation budget in radians (0 = no cap). "
                                        "Caps the maximum phase rotation at any single "
@@ -76,14 +77,14 @@ class DiversityBoost(io.ComfyNode):
         return time.time()
 
     @classmethod
-    def execute(cls, model, strength, freq_cutoff, max_rotation, energy_compensate) -> io.NodeOutput:
+    def execute(cls, model, strength, n_periods, max_rotation, energy_compensate) -> io.NodeOutput:
         m = model.clone()
 
         if strength > 1e-6:
             m.set_model_sampler_post_cfg_function(
                 build_phase_injection_fn(
                     strength=strength,
-                    freq_cutoff=freq_cutoff,
+                    n_periods=n_periods,
                     max_rotation=max_rotation,
                     hf_preserve=0.0,
                     energy_compensate=energy_compensate,

@@ -25,9 +25,8 @@ Key design decisions:
     worst-case rotation, widening the usable strength range to [0, 1].
   - 6th-order Butterworth LPF (not Gaussian): steep transition band cleanly
     separates composition-scale frequencies (≤4 spatial periods across the frame)
-    from object-scale frequencies (≥5 periods).  At r_cut=0.02 (default):
-    bins with r ≤ 0.01 get mask ≈ 1.0 (full composition diversity), bins at
-    r = 0.04 get mask ≈ 0.02 (object internals fully protected).  A Gaussian
+    from object-scale frequencies (≥5 periods).  The cutoff is computed as
+    n_periods / max(H, W), making it resolution-independent.  A Gaussian
     with σ=0.05 leaks 0.73 at r=0.04, causing probabilistic distortion of
     object structure.
   - High-frequency attenuation (hf_preserve): distilled models produce a
@@ -163,18 +162,19 @@ def _phase_inject(raw_pred, raw_noise, strength, freq_mask, max_rotation,
     return raw_new.to(dtype=raw_pred.dtype)
 
 
-def build_phase_injection_fn(strength=1.0, freq_cutoff=0.005, max_rotation=1.5708,
+def build_phase_injection_fn(strength=1.0, n_periods=2, max_rotation=1.5708,
                              hf_preserve=0.0, energy_compensate=False):
     """Build a post_cfg_function that injects noise phase into the denoised prediction.
 
     Parameters:
         strength: blend factor gamma (0 = no effect, 1 = full injection).
-        freq_cutoff: Butterworth cutoff in normalized frequency units.
-                     Controls how many spatial periods are affected:
-                     - 0.010: ≤2 periods (global balance only, ultra-conservative)
-                     - 0.015: ≤3 periods (conservative, minimal object influence)
-                     - 0.020: ≤4 periods (balanced, recommended)
-                     - 0.025: ≤5 periods (aggressive, more diversity, higher risk)
+        n_periods: max spatial periods to affect (integer).
+                   The Butterworth cutoff is computed as n_periods / max(H, W),
+                   so the effect is resolution-independent.
+                   - 1: ultra-conservative (global balance only)
+                   - 2: conservative (default, recommended)
+                   - 3: balanced (moderate diversity)
+                   - 4: aggressive (more diversity, higher risk)
         max_rotation: per-bin rotation budget φ_max in radians (0 = no cap).
                       Default π/2 ≈ 1.5708.
         hf_preserve: high-frequency amplitude preservation factor D in [0, 1].
@@ -188,6 +188,7 @@ def build_phase_injection_fn(strength=1.0, freq_cutoff=0.005, max_rotation=1.570
     state = {
         "freq_mask": None,
         "cached_hw": None,
+        "cached_cutoff": None,
     }
 
     def phase_inject_hook(args):
@@ -216,9 +217,11 @@ def build_phase_injection_fn(strength=1.0, freq_cutoff=0.005, max_rotation=1.570
 
         # --- Build or reuse frequency mask ---
         H, W = raw_pred.shape[-2:]
+        freq_cutoff = n_periods / max(H, W)
         if state["cached_hw"] != (H, W):
             state["freq_mask"] = _build_freq_mask(H, W, freq_cutoff, raw_pred.device)
             state["cached_hw"] = (H, W)
+            state["cached_cutoff"] = freq_cutoff
         freq_mask = state["freq_mask"].to(device=raw_pred.device)
 
         # --- Core: phase injection ---
@@ -229,37 +232,41 @@ def build_phase_injection_fn(strength=1.0, freq_cutoff=0.005, max_rotation=1.570
         if log.isEnabledFor(logging.INFO):
             with torch.no_grad():
                 delta = (raw_new - raw_pred).float()
+                B = raw_pred.shape[0]
+
+                # Per-batch-item diagnostics
+                per_item = []
+                for b in range(B):
+                    d_rms = delta[b].pow(2).mean().sqrt().item()
+                    p_rms = raw_pred[b].float().pow(2).mean().sqrt().item()
+                    per_item.append((d_rms, p_rms))
+
                 delta_rms = delta.pow(2).mean().sqrt().item()
                 pred_rms = raw_pred.float().pow(2).mean().sqrt().item()
 
-                if log.isEnabledFor(logging.DEBUG):
-                    F_pred_log = torch.fft.rfft2(raw_pred.float())
-                    F_new_log = torch.fft.rfft2(raw_new.float())
-                    phase_diff = (F_new_log * F_pred_log.conj()).angle().abs()
-                    mask_thresh = freq_mask > 0.1
-                    if mask_thresh.any():
-                        mean_phase_shift = phase_diff[mask_thresh.expand_as(phase_diff)].mean().item()
-                    else:
-                        mean_phase_shift = 0.0
-
-                    log.debug(
-                        "[DiversityBoost] step=0  strength=%.3f  freq_cutoff=%.3f  "
-                        "max_rotation=%.3f  hf_preserve=%.3f  shape=%s  "
-                        "delta_rms=%.4f  pred_rms=%.4f  ratio=%.4f  "
-                        "mean_phase_shift=%.3f rad (%.1f deg)",
-                        strength, freq_cutoff, max_rotation, hf_preserve,
+                if B > 1:
+                    per_item_str = "  ".join(
+                        f"b{b}={d:.4f}/{p:.4f}" for b, (d, p) in enumerate(per_item)
+                    )
+                    log.info(
+                        "[DiversityBoost] step=0  strength=%.3f  n_periods=%d  "
+                        "freq_cutoff=%.4f  max_rotation=%.3f  hf_preserve=%.3f  "
+                        "shape=%s  delta_rms=%.4f  pred_rms=%.4f  ratio=%.4f  "
+                        "per_batch(delta/pred): %s",
+                        strength, n_periods, freq_cutoff,
+                        max_rotation, hf_preserve,
                         list(raw_pred.shape),
                         delta_rms, pred_rms,
                         delta_rms / max(pred_rms, 1e-8),
-                        mean_phase_shift,
-                        math.degrees(mean_phase_shift),
+                        per_item_str,
                     )
                 else:
                     log.info(
-                        "[DiversityBoost] step=0  strength=%.3f  freq_cutoff=%.3f  "
-                        "max_rotation=%.3f  hf_preserve=%.3f  shape=%s  "
-                        "delta_rms=%.4f  pred_rms=%.4f  ratio=%.4f",
-                        strength, freq_cutoff, max_rotation, hf_preserve,
+                        "[DiversityBoost] step=0  strength=%.3f  n_periods=%d  "
+                        "freq_cutoff=%.4f  max_rotation=%.3f  hf_preserve=%.3f  "
+                        "shape=%s  delta_rms=%.4f  pred_rms=%.4f  ratio=%.4f",
+                        strength, n_periods, freq_cutoff,
+                        max_rotation, hf_preserve,
                         list(raw_pred.shape),
                         delta_rms, pred_rms,
                         delta_rms / max(pred_rms, 1e-8),
