@@ -25,10 +25,10 @@ Key design decisions:
     worst-case rotation, widening the usable strength range to [0, 1].
   - 6th-order Butterworth LPF (not Gaussian): steep transition band cleanly
     separates composition-scale frequencies (≤4 spatial periods across the frame)
-    from object-scale frequencies (≥5 periods).  The cutoff is computed as
-    n_periods / max(H, W), making it resolution-independent.  A Gaussian
-    with σ=0.05 leaks 0.73 at r=0.04, causing probabilistic distortion of
-    object structure.
+    from object-scale frequencies (≥5 periods).  Uses elliptical normalization
+    so n_periods applies independently per axis — resolution and aspect-ratio
+    independent.  A Gaussian with σ=0.05 leaks 0.73 at r=0.04, causing
+    probabilistic distortion of object structure.
   - High-frequency attenuation (hf_preserve): distilled models produce a
     fully-formed x0_hat at step 0 where HF details are spatially bound to LF
     structure.  Rotating only LF phase while preserving HF amplitude causes
@@ -54,33 +54,31 @@ from .sampling import (
 log = logging.getLogger("ComfyUI-DiversityBoost")
 
 
-def _build_freq_mask(H, W, freq_cutoff, device):
-    """Build a Butterworth low-pass frequency mask for rfft2 output.
+def _build_freq_mask(H, W, n_periods, device):
+    """Build an elliptical Butterworth low-pass frequency mask for rfft2 output.
 
     Returns a real-valued mask [1, 1, H, W//2+1] with:
-    - 6th-order Butterworth rolloff: 1 / sqrt(1 + (r/r_cut)^12)
+    - 6th-order Butterworth rolloff per-axis normalized
     - DC component zeroed (preserves image mean / energy conservation)
 
-    6th-order Butterworth is chosen for its steep transition band that cleanly
-    separates composition-scale frequencies from object-scale frequencies.
-    At the default r_cut=0.02, the profile is:
-        r ≤ 0.01 (≤2 spatial periods): mask ≈ 1.0  (full composition diversity)
-        r = 0.02 (4 periods, cutoff):   mask = 0.71 (transition band)
-        r ≥ 0.04 (≥8 periods):          mask ≈ 0.02 (object internals protected)
-
-    A Gaussian cannot achieve this: at σ=0.05, r=0.04 gets mask=0.73 (causes
-    probabilistic object distortion).  Lower-order Butterworth (n=4) either
-    affects too few bins (steep cutoff) or leaks into object scale.
+    Uses elliptical normalization: each axis is normalized by its own cutoff
+    (n_periods/H for vertical, n_periods/W for horizontal).  This ensures
+    "n_periods=2" means ≤2 full cycles in EACH direction, regardless of
+    aspect ratio.  A circular mask with cutoff = n/max(H,W) would under-count
+    bins along the shorter axis.
     """
     freq_y = torch.fft.fftfreq(H, device=device).unsqueeze(1)     # [H, 1]
     freq_x = torch.fft.rfftfreq(W, device=device).unsqueeze(0)    # [1, W//2+1]
 
-    freq_r = torch.sqrt(freq_y ** 2 + freq_x ** 2)
+    # Elliptical normalized radius: each axis scaled by its own dimension.
+    # r_norm = sqrt((fy * H / n)^2 + (fx * W / n)^2)
+    # r_norm = 1.0 at the cutoff boundary in each axis direction.
+    r_norm = torch.sqrt((freq_y * H / n_periods) ** 2 +
+                        (freq_x * W / n_periods) ** 2)
 
-    # 6th-order Butterworth: 1 / sqrt(1 + (r/r_c)^(2n)), n=6 → exponent=12.
-    # Maximally flat passband, steep rolloff, no ringing.
-    # At r = 2*r_cut: mask = 1/sqrt(1 + 4096) ≈ 0.016.
-    mask = 1.0 / torch.sqrt(1.0 + (freq_r / freq_cutoff).pow(12))
+    # 6th-order Butterworth: 1 / sqrt(1 + r_norm^12).
+    # r_norm = 1 → mask = 0.707 (cutoff), r_norm = 2 → mask ≈ 0.016.
+    mask = 1.0 / torch.sqrt(1.0 + r_norm.pow(12))
 
     # Zero DC: preserve mean intensity
     mask[0, 0] = 0.0
@@ -169,8 +167,10 @@ def build_phase_injection_fn(strength=1.0, n_periods=2, max_rotation=1.5708,
     Parameters:
         strength: blend factor gamma (0 = no effect, 1 = full injection).
         n_periods: max spatial periods to affect (integer).
-                   The Butterworth cutoff is computed as n_periods / max(H, W),
-                   so the effect is resolution-independent.
+                   The Butterworth cutoff uses elliptical normalization:
+                   r_norm = sqrt((ky/n)^2 + (kx/n)^2), where ky,kx are
+                   integer cycle counts per axis.  Resolution and aspect-ratio
+                   independent — n_periods=2 always covers the same bins.
                    - 1: ultra-conservative (global balance only)
                    - 2: conservative (default, recommended)
                    - 3: balanced (moderate diversity)
@@ -188,7 +188,6 @@ def build_phase_injection_fn(strength=1.0, n_periods=2, max_rotation=1.5708,
     state = {
         "freq_mask": None,
         "cached_hw": None,
-        "cached_cutoff": None,
     }
 
     def phase_inject_hook(args):
@@ -217,11 +216,9 @@ def build_phase_injection_fn(strength=1.0, n_periods=2, max_rotation=1.5708,
 
         # --- Build or reuse frequency mask ---
         H, W = raw_pred.shape[-2:]
-        freq_cutoff = n_periods / max(H, W)
         if state["cached_hw"] != (H, W):
-            state["freq_mask"] = _build_freq_mask(H, W, freq_cutoff, raw_pred.device)
+            state["freq_mask"] = _build_freq_mask(H, W, n_periods, raw_pred.device)
             state["cached_hw"] = (H, W)
-            state["cached_cutoff"] = freq_cutoff
         freq_mask = state["freq_mask"].to(device=raw_pred.device)
 
         # --- Core: phase injection ---
@@ -250,10 +247,10 @@ def build_phase_injection_fn(strength=1.0, n_periods=2, max_rotation=1.5708,
                     )
                     log.info(
                         "[DiversityBoost] step=0  strength=%.3f  n_periods=%d  "
-                        "freq_cutoff=%.4f  max_rotation=%.3f  hf_preserve=%.3f  "
+                        "max_rotation=%.3f  hf_preserve=%.3f  "
                         "shape=%s  delta_rms=%.4f  pred_rms=%.4f  ratio=%.4f  "
                         "per_batch(delta/pred): %s",
-                        strength, n_periods, freq_cutoff,
+                        strength, n_periods,
                         max_rotation, hf_preserve,
                         list(raw_pred.shape),
                         delta_rms, pred_rms,
@@ -263,9 +260,9 @@ def build_phase_injection_fn(strength=1.0, n_periods=2, max_rotation=1.5708,
                 else:
                     log.info(
                         "[DiversityBoost] step=0  strength=%.3f  n_periods=%d  "
-                        "freq_cutoff=%.4f  max_rotation=%.3f  hf_preserve=%.3f  "
+                        "max_rotation=%.3f  hf_preserve=%.3f  "
                         "shape=%s  delta_rms=%.4f  pred_rms=%.4f  ratio=%.4f",
-                        strength, n_periods, freq_cutoff,
+                        strength, n_periods,
                         max_rotation, hf_preserve,
                         list(raw_pred.shape),
                         delta_rms, pred_rms,
