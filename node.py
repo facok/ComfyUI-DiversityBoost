@@ -66,6 +66,13 @@ class DiversityBoost(io.ComfyNode):
                                          "attenuated, reducing total energy. Enable this "
                                          "to compensate by scaling the result back to the "
                                          "original energy level. Off by default."),
+                io.Float.Input("dc_preserve", default=0.0, min=0.0, max=1.0, step=0.1,
+                               tooltip="DC amplitude preservation (0-1). "
+                                       "DC is the image mean (overall brightness/color). "
+                                       "0 = let DC be attenuated with HF (model rebuilds "
+                                       "brightness freely, often better quality). "
+                                       "1 = fully preserve DC (original brightness). "
+                                       "Default 0."),
             ],
             outputs=[
                 io.Model.Output(display_name="model"),
@@ -77,7 +84,7 @@ class DiversityBoost(io.ComfyNode):
         return time.time()
 
     @classmethod
-    def execute(cls, model, strength, n_periods, max_rotation, energy_compensate) -> io.NodeOutput:
+    def execute(cls, model, strength, n_periods, max_rotation, energy_compensate, dc_preserve) -> io.NodeOutput:
         m = model.clone()
 
         if strength > 1e-6:
@@ -88,6 +95,7 @@ class DiversityBoost(io.ComfyNode):
                     max_rotation=max_rotation,
                     hf_preserve=0.0,
                     energy_compensate=energy_compensate,
+                    dc_preserve=dc_preserve,
                 ),
             )
 

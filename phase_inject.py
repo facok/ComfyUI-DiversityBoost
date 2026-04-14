@@ -87,7 +87,7 @@ def _build_freq_mask(H, W, n_periods, device):
 
 
 def _phase_inject(raw_pred, raw_noise, strength, freq_mask, max_rotation,
-                   hf_preserve, energy_compensate):
+                   hf_preserve, energy_compensate, dc_preserve):
     """Low-frequency phase injection with optional high-frequency attenuation.
 
     Given:
@@ -100,6 +100,9 @@ def _phase_inject(raw_pred, raw_noise, strength, freq_mask, max_rotation,
                          1.0 = preserve all HF amplitude (original behavior).
                          0.0 = attenuate HF amplitude to zero (maximum blur).
         energy_compensate — if True, rescale output RMS to match original prediction.
+        dc_preserve   — DC amplitude preservation factor in [0, 1].
+                         0.0 = DC attenuated like HF (model rebuilds brightness).
+                         1.0 = DC fully preserved (original brightness).
 
     Returns:
         raw_new — modified prediction with injected phase  [B, C, H, W]
@@ -140,9 +143,10 @@ def _phase_inject(raw_pred, raw_noise, strength, freq_mask, max_rotation,
     # high-freq bins (M≈0) get S=D (attenuated).
     if hf_preserve < 1.0 - 1e-6:
         amp_scale = freq_mask + hf_preserve * (1.0 - freq_mask)         # [1, 1, H, W//2+1]
-        # DC bin must be preserved: freq_mask zeroes DC (for phase rotation),
-        # but amp_scale must NOT zero DC amplitude (that's the image mean).
-        amp_scale[:, :, 0, 0] = 1.0
+        # DC amplitude: dc_preserve controls how much DC is kept.
+        # freq_mask[0,0]=0 → amp_scale[0,0]=hf_preserve without this line.
+        # dc_preserve=1 → fully preserve, dc_preserve=0 → same as hf_preserve.
+        amp_scale[:, :, 0, 0] = dc_preserve
         F_new = F_pred * (rotation * amp_scale)
     else:
         F_new = F_pred * rotation  # amplitude exactly preserved
@@ -161,7 +165,8 @@ def _phase_inject(raw_pred, raw_noise, strength, freq_mask, max_rotation,
 
 
 def build_phase_injection_fn(strength=1.0, n_periods=2, max_rotation=1.5708,
-                             hf_preserve=0.0, energy_compensate=False):
+                             hf_preserve=0.0, energy_compensate=False,
+                             dc_preserve=0.0):
     """Build a post_cfg_function that injects noise phase into the denoised prediction.
 
     Parameters:
@@ -180,6 +185,9 @@ def build_phase_injection_fn(strength=1.0, n_periods=2, max_rotation=1.5708,
         hf_preserve: high-frequency amplitude preservation factor D in [0, 1].
                      D=0 produces a blurry "composition sketch", D=1 preserves all HF.
         energy_compensate: if True, rescale output RMS to match original prediction.
+        dc_preserve: DC amplitude preservation factor in [0, 1].
+                     0 = DC attenuated (model rebuilds brightness freely).
+                     1 = DC fully preserved (original brightness kept).
 
     Returns:
         A closure suitable for model.set_model_sampler_post_cfg_function().
@@ -223,7 +231,8 @@ def build_phase_injection_fn(strength=1.0, n_periods=2, max_rotation=1.5708,
 
         # --- Core: phase injection ---
         raw_new = _phase_inject(raw_pred, raw_noise, strength, freq_mask,
-                                max_rotation, hf_preserve, energy_compensate)
+                                max_rotation, hf_preserve, energy_compensate,
+                                dc_preserve)
 
         # --- Logging ---
         if log.isEnabledFor(logging.INFO):
