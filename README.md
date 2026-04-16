@@ -1,6 +1,6 @@
 # ComfyUI-DiversityBoost
 
-Restore composition diversity for distilled diffusion models. Training-free, single-step frequency-domain phase injection.
+Restore composition diversity for distilled diffusion models. Training-free, single-step, zero model modification.
 
 > [中文版 README](README_zh.md)
 
@@ -12,20 +12,22 @@ Root cause: distillation freezes the spatial distribution of token norms across 
 
 ## The Fix
 
-DiversityBoost injects seed-dependent low-frequency phase from the initial noise into the model's denoised prediction at **step 0 only**, via a post-CFG hook.
+DiversityBoost applies two mechanisms at **step 0 only**, via a single post-CFG hook:
 
-In the frequency domain, **amplitude** encodes energy distribution (naturalness), while **phase** encodes spatial arrangement (composition). By rotating only low-frequency phase — while attenuating high-frequency amplitude to prevent deformities — different seeds produce genuinely different compositions again.
+1. **HF attenuation** (Butterworth LPF) — erases the high-frequency spatial anchoring from the model's fully-committed prediction, producing a blurry "composition sketch"
+2. **DCT composition push** — applies a random low-frequency spatial field that redistributes energy across the latent, nudging the model toward different compositions
+
+The model then freely reconstructs coherent details at subsequent steps, with per-seed noise driving different reconstruction paths.
 
 Zero model modification. Zero training. One node.
 
 ## How It Works
 
-1. **FFT** the model's step-0 prediction and the initial noise
-2. Compute a **shared rotation field** (channel-mean phasors) — preserves inter-channel phase exactly (no color fringing)
-3. Apply a **6th-order Butterworth low-pass filter** — only composition-scale frequencies are touched; object-scale details are protected
-4. **Tanh soft-cap** per-bin rotation — decouples diversity strength from worst-case rotation risk
-5. **Attenuate high-frequency amplitude** — prevents "frequency shearing" (body moves but fingers stay pinned)
-6. **IFFT** back to spatial domain
+1. Convert the model's step-0 prediction to raw latent space
+2. **Butterworth LPF** in frequency domain — attenuate high-frequency amplitude (6th-order, elliptical, resolution-independent)
+3. **DCT spatial field** — synthesize a random 4×4 low-frequency field (zero DC, pink noise weighted), normalize to unit std, scale by strength
+4. **Multiplicative push** — `blurred × (1 + field)`, clamped to prevent dead zones
+5. Convert back
 
 Step 0 only. The model's own attractor handles the rest.
 
@@ -54,51 +56,39 @@ Default settings work well. No tuning needed for most use cases.
 
 | Parameter | Default | Range | Description |
 |-----------|---------|-------|-------------|
-| **strength** | 1.0 | 0.0 – 1.0 | Phase rotation strength. 1.0 is safe with the default max_rotation cap. |
-| **n_periods** | 2 | 1 – 10 | Max spatial periods to affect. Resolution-independent. |
-| **max_rotation** | 1.5708 (π/2) | 0.0 – 3.14 | Per-bin rotation budget (radians). Caps worst-case rotation via tanh. |
+| **strength** | 0.5 | 0.0 – 2.0 | Composition push amplitude. 0 = cleanup only, 0.5 = moderate, 1.0 = strong. |
+| **clamp** | 1.0 | 0.1 – 3.0 | Upper bound for the multiplicative scale factor. Scale is clamped to [0.1, 1+clamp]. Higher = allow stronger push. |
+| **noise_type** | pink | pink / white / blue | Frequency spectrum of random DCT coefficients. Pink boosts low-freq composition modes (recommended). |
+| **n_periods** | 2 | 1 – 10 | Butterworth cutoff — spatial periods to preserve. Lower = more HF erased = more diversity. |
+| **dc_preserve** | 0.0 | 0.0 – 1.0 | DC amplitude preservation. 0 = max diversity (tone varies per seed). 1 = preserve original brightness. |
 | **energy_compensate** | False | — | Rescale output RMS to match original. Off by default. |
 
 ### n_periods Guide
 
-| Value | Effect |
-|-------|--------|
-| 1 | Ultra-conservative (global balance only) |
-| 2 | Conservative (default, recommended) |
-| 3 | Balanced (moderate diversity) |
-| 4 | Aggressive (more diversity, higher risk) |
-
-The cutoff adapts to image resolution automatically: `freq_cutoff = n_periods / max(H, W)`. This means `n_periods=2` always affects the same composition-scale frequencies regardless of whether you're generating 512x512 or 2048x2048.
-
-### max_rotation Presets
+n_periods sets the Butterworth -3dB point at FFT bin N. Frequencies above this are strongly attenuated.
 
 | Value | Effect |
 |-------|--------|
-| 1.00 | Conservative — less diversity, very safe |
-| 1.57 (π/2) | Balanced (default, recommended) |
-| 2.00 | Aggressive — more diversity, some risk |
-| 0.00 | Disabled — original uncapped behavior |
+| 1 | Most aggressive — erases nearly all spatial structure including most DCT composition signal |
+| 2 | Recommended — clean frequency gap between DCT composition modes (bin ~1.5) and object-scale details (bin ~5+) |
+| 3 | Moderate — preserves more mid-frequency detail |
+| 4+ | Mild — less HF erased, less diversity |
 
-## DiversityBoost vs Dummy Token
+### strength Guide
 
-Both aim to restore diversity in distilled models, but they work at fundamentally different levels:
-
-| | DiversityBoost | Dummy Token |
-|---|---|---|
-| **Mechanism** | Rotate low-frequency phase in frequency domain | Add/modify padding tokens to shift attention context |
-| **Target** | Spatial arrangement (composition skeleton) | Global attention bias (indirect) |
-| **Composition change** | Direct and controllable (precise rotation angles) | Indirect, random (butterfly effect) |
-| **Diversity source** | Each seed's unique noise phase | Random padding token content |
-| **Safety** | Amplitude exactly preserved; Butterworth + tanh double-bounded | No mathematical guarantees |
-| **Prompt adherence** | Unaffected (operates on spatial structure, not semantics) | May degrade (alters attention distribution) |
-
-In short: DiversityBoost operates precisely on composition-scale phase in the frequency domain, with mathematically bounded safety guarantees. Dummy token injects perturbation at the token level — the effect is indirect and unpredictable.
+| Value | Effect |
+|-------|--------|
+| 0.0 | HF cleanup only (no composition push) |
+| 0.3 | Subtle composition variation |
+| 0.5 | Moderate (default, recommended) |
+| 1.0 | Strong composition changes |
 
 ## Tips
 
-- **Start with defaults** — strength=1.0, n_periods=2, max_rotation=π/2 is a safe baseline
-- **Want more diversity?** Raise `n_periods` first (more frequency bins affected), then `max_rotation` (higher per-bin ceiling)
-- **Compatible** with other model patches (ComfyUI-LCS color control, ControlNet, etc.) — operates on a different hook
+- **Start with defaults** — strength=0.5, n_periods=2, noise_type=pink is a safe baseline
+- **Want more diversity?** Raise `strength`. Keep `n_periods=2` — lowering to 1 kills most DCT composition signal
+- **Want cleanup only?** Set `strength=0` — pure HF attenuation, no composition push
+- **Compatible** with other model patches (ControlNet, etc.) — operates on a different hook
 
 ## Tested Models
 
