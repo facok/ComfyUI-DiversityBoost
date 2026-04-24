@@ -1,18 +1,19 @@
-"""ComfyUI-DiversityBoost: Restore composition diversity for distilled diffusion models.
+"""ComfyUI-DiversityBoost V3: Restore composition diversity for distilled diffusion models.
 
-HF attenuation + DCT composition push at step 0.  Training-free, single-step,
-zero model modification.
+HF attenuation (polynomial frequency modulation) + DCT composition push at step 0.
+Training-free, single-step, zero model modification.
 """
 
 from comfy_api.latest import ComfyExtension, io
-from .core_node import DiversityBoostCore
+from .core_node import DiversityBoostCoreV3
+from .core_legacy_node import DiversityBoostCoreLegacy
 
 
 class DiversityBoostExtension(ComfyExtension):
-    """V3 ComfyExtension providing the DiversityBoost node."""
+    """V3 ComfyExtension providing the DiversityBoost nodes."""
 
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
-        return [DiversityBoostCore]
+        return [DiversityBoostCoreV3, DiversityBoostCoreLegacy]
 
 
 async def comfy_entrypoint() -> DiversityBoostExtension:
@@ -22,11 +23,13 @@ async def comfy_entrypoint() -> DiversityBoostExtension:
 
 # V2 backward compatibility
 NODE_CLASS_MAPPINGS = {
-    "DiversityBoostCore": DiversityBoostCore,
+    "DiversityBoostCore": DiversityBoostCoreLegacy,
+    "DiversityBoostCoreV3": DiversityBoostCoreV3,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "DiversityBoostCore": "Diversity Boost",
+    "DiversityBoostCoreV3": "Diversity Boost (V3)",
 }
 
 __all__ = [
@@ -34,5 +37,6 @@ __all__ = [
     "NODE_DISPLAY_NAME_MAPPINGS",
     "DiversityBoostExtension",
     "comfy_entrypoint",
-    "DiversityBoostCore",
+    "DiversityBoostCoreV3",
+    "DiversityBoostCoreLegacy",
 ]
