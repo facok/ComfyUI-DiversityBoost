@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-diversityboost"
 description = "Restore composition diversity for distilled diffusion models. Training-free, single-step, zero model modification."
-version = "3.0.0"
+version = "3.0.1"
 license = "MIT"
 requires-python = ">=3.10"
 
