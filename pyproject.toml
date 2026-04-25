@@ -9,6 +9,6 @@ requires-python = ">=3.10"
 Repository = "https://github.com/facok/ComfyUI-DiversityBoost"
 
 [tool.comfy]
-PublisherId = "fok2026"
+PublisherId = "fok"
 DisplayName = "DiversityBoost"
 Icon = ""
